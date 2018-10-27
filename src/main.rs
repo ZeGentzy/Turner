@@ -13,7 +13,7 @@ const CHUNK_SIZE: usize = ENTITY_COUNT * 4;
 const ROUNDS: usize = 10;
 const TIME_MARGIN: usize = (u8::max_value() as usize * CHUNK_SIZE * 2); // times 2 for saftey
 const TIME_CAP: Time = Time::max_value() - TIME_MARGIN as Time;
-const PREGENED_RANDOM_U32: usize = CHUNK_SIZE * ROUNDS * 2; // times 3 for saftey
+const PREGENED_RANDOM_U8: usize = CHUNK_SIZE * ROUNDS + ENTITY_COUNT + 10;
 const NUM_BUCKETS: usize = 256;
 
 struct PregenedRand<N> {
@@ -58,7 +58,7 @@ where
 }
 
 thread_local! {
-    static U8RAND: PregenedRand<u8> = PregenedRand::new(PREGENED_RANDOM_U32);
+    static U8RAND: PregenedRand<u8> = PregenedRand::new(PREGENED_RANDOM_U8);
 }
 
 #[derive(Debug)]
@@ -135,6 +135,7 @@ fn do_turns(num_buckets: usize) -> Duration {
 
             let new_elem = (cur.0, entities[cur.0].time);
             let i = new_elem.1 as usize % num_buckets;
+
             let pos = orders[i]
                 .binary_search_by(|a| new_elem.1.cmp(&a.1))
                 .unwrap_or_else(|o| o);
@@ -147,7 +148,7 @@ fn do_turns(num_buckets: usize) -> Duration {
 
                 let mut frpos = rpos;
                 let mut found = false;
-                while bucket_orders[frpos].1 == end.1 {
+                while frpos < bucket_orders.len() && bucket_orders_cmp(&bucket_orders[frpos], &end) == Ordering::Equal {
                     if bucket_orders[frpos].0 == i {
                         found = true;
                         break;
@@ -155,11 +156,14 @@ fn do_turns(num_buckets: usize) -> Duration {
                     frpos += 1;
                 }
 
-                if !found {
+                if !found && frpos != 0 {
                     frpos = rpos - 1;
-                    while bucket_orders[frpos].1 == end.1 {
+                    while bucket_orders_cmp(&bucket_orders[frpos], &end) == Ordering::Equal {
                         if bucket_orders[frpos].0 == i {
                             found = true;
+                            break;
+                        }
+                        if frpos == 0 {
                             break;
                         }
                         frpos -= 1;
@@ -178,6 +182,7 @@ fn do_turns(num_buckets: usize) -> Duration {
             }
             orders[i].insert(pos, new_elem);
         }
+
 
         println!("Late Round {}", i);
         let max = entities.iter().max_by(|a, b| a.time.cmp(&b.time)).unwrap().time;
