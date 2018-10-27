@@ -4,9 +4,11 @@ use rand::distributions::{Distribution, Standard};
 use std::cell::Cell;
 use std::thread::LocalKey;
 use std::time::{Duration, Instant};
+use std::cmp::Ordering;
 
 type Time = u32;
 const ENTITY_COUNT: usize = 1_000_000;
+//const ENTITY_COUNT: usize = 1_0;
 const CHUNK_SIZE: usize = ENTITY_COUNT * 4;
 const ROUNDS: usize = 10;
 const TIME_MARGIN: usize = (u8::max_value() as usize * CHUNK_SIZE * 2); // times 2 for saftey
@@ -95,20 +97,40 @@ fn do_turns(num_buckets: usize) -> Duration {
         orders.push(make_order(i, num_buckets, &entities));
     }
 
+    let mut bucket_orders = vec![];
+    for (i, order) in (&orders).iter().enumerate() {
+        bucket_orders.push((i, order.last().map(|o| *o)));
+    }
+
+    type BucketOrderType = (usize, Option<(usize, Time)>);
+    fn bucket_orders_cmp(a: &BucketOrderType, b: &BucketOrderType) -> Ordering {
+        match (a.1, b.1) {
+            (None, None) => Ordering::Equal,
+            (None, Some(_)) => Ordering::Less,
+            (Some(_), None) => Ordering::Greater,
+            (Some(a), Some(b)) => b.1.cmp(&a.1),
+        }
+    }
+    bucket_orders.sort_unstable_by(bucket_orders_cmp);
+
     let now = Instant::now();
     println!("Started");
     for i in 0..ROUNDS {
         println!("Round {}", i);
         for _ in 0..CHUNK_SIZE {
-            let mut chosen = (0, Time::max_value());
-            for (i, order) in (&orders).iter().enumerate() {
-                let v = order.last().map(|x| x.1).unwrap_or(Time::max_value());
-                if v <= chosen.1 {
-                    chosen = (i, v);
-                }
-            }
+            //println!("bucket_orders {:?}", bucket_orders);
 
-            let cur = orders[chosen.0].pop().unwrap();
+            let cur_b = bucket_orders.pop().unwrap();
+            let cur = orders[cur_b.0].pop().unwrap();
+
+            //println!("Doing {:?}", cur);
+
+            let new_elem = (cur_b.0, orders[cur_b.0].last().map(|o| *o));
+            let pos = bucket_orders
+                .binary_search_by(|a| bucket_orders_cmp(a, &new_elem))
+                .unwrap_or_else(|o| o);
+            bucket_orders.insert(pos, new_elem);
+
             entities[cur.0].time += PregenedRand::next(&U8RAND) as Time;
 
             let new_elem = (cur.0, entities[cur.0].time);
@@ -116,6 +138,44 @@ fn do_turns(num_buckets: usize) -> Duration {
             let pos = orders[i]
                 .binary_search_by(|a| new_elem.1.cmp(&a.1))
                 .unwrap_or_else(|o| o);
+
+            if pos == orders[i].len() {
+                let end = (i, orders[i].last().map(|o| *o));
+                let rpos = bucket_orders
+                    .binary_search_by(|a| bucket_orders_cmp(a, &end))
+                    .unwrap();
+
+                let mut frpos = rpos;
+                let mut found = false;
+                while bucket_orders[frpos].1 == end.1 {
+                    if bucket_orders[frpos].0 == i {
+                        found = true;
+                        break;
+                    }
+                    frpos += 1;
+                }
+
+                if !found {
+                    frpos = rpos - 1;
+                    while bucket_orders[frpos].1 == end.1 {
+                        if bucket_orders[frpos].0 == i {
+                            found = true;
+                            break;
+                        }
+                        frpos -= 1;
+                    }
+                }
+
+                assert!(found);
+                bucket_orders.remove(frpos);
+
+                let new_elem = (i, Some(new_elem));
+                let pos = bucket_orders
+                    .binary_search_by(|a| bucket_orders_cmp(a, &new_elem))
+                    .unwrap_or_else(|o| o);
+                assert!(pos >= frpos);
+                bucket_orders.insert(pos, new_elem);
+            }
             orders[i].insert(pos, new_elem);
         }
 
