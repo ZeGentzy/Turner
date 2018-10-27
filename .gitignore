@@ -1,0 +1,5 @@
+oprofile_data
+cachegrind.out
+callgrind.out.*
+perf.data
+target
