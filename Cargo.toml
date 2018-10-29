@@ -10,3 +10,4 @@ lazy_static = "*"
 
 [profile.release]
 debug = true
+lto = true
