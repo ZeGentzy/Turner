@@ -85,9 +85,9 @@ fn do_turns(num_buckets: usize) -> Duration {
     }
     println!("Entities Gen'd");
 
-    fn sort_fn(a: &Time, b: &Time) -> Ordering { b.cmp(a) }
-    fn bucket_fn(a: &Time, num_buckets: usize) -> usize { *a as usize % num_buckets }
-    let mut bucket = Bucket::new(entities.iter().map(|e| e.time).collect(), sort_fn, bucket_fn, num_buckets);
+    fn sort_fn(a: &Entity, b: &Entity) -> Ordering { b.time.cmp(&a.time) }
+    fn bucket_fn(a: &Entity, num_buckets: usize) -> usize { a.time as usize % num_buckets }
+    let mut bucket = Bucket::new(entities, sort_fn, bucket_fn, num_buckets);
     println!("Buckets Gen'd");
 
     let now = Instant::now();
@@ -95,22 +95,21 @@ fn do_turns(num_buckets: usize) -> Duration {
     for i in 0..ROUNDS {
         println!("Round {}", i);
         for _ in 0..CHUNK_SIZE {
-            let (index, _item) = bucket.pop(sort_fn);
-            entities[index].time += PregenedRand::next(&U8RAND) as Time;
-            bucket.reinsert(index, entities[index].time, sort_fn, bucket_fn);
+            let mut item = bucket.pop(sort_fn);
+            item.item.time += PregenedRand::next(&U8RAND) as Time;
+            bucket.reinsert(item, sort_fn, bucket_fn);
         }
 
-        let max = bucket.max(sort_fn).unwrap();
+        let max = bucket.max(sort_fn).unwrap().time;
         println!("Late Round {} {}", i, max);
         if max > TIME_CAP {
-            let min = bucket.min().unwrap();
+            let min = bucket.min().unwrap().time;
             println!("Rebase! {} {}", i, min);
 
-            entities.iter_mut().for_each(|e| e.time -= min);
-            bucket = bucket.modify(|e| *e -= min, sort_fn, bucket_fn);
+            bucket = bucket.modify(|e| e.time -= min, sort_fn, bucket_fn);
             println!("Buckets Gen'd");
 
-            let max = bucket.max(sort_fn).unwrap();
+            let max = bucket.max(sort_fn).unwrap().time;
             if max > TIME_CAP {
                 panic!("Spread too large.");
             }
@@ -134,6 +133,11 @@ struct Bucket<T> {
     items: Vec<T>,
     buckets: Vec<Vec<(usize, T)>>,
     heads: Vec<(usize, Option<(usize, T)>)>,
+}
+
+struct BucketItem<T> {
+    index: usize,
+    item: T,
 }
 
 impl<T> Bucket<T>
@@ -197,7 +201,7 @@ where
     }
 
     // Returns the index and the item
-    fn pop<S>(&mut self, mut sort_fn: S) -> (usize, T)
+    fn pop<S>(&mut self, mut sort_fn: S) -> BucketItem<T>
     where
         S: FnMut(&T, &T) -> Ordering,
     {
@@ -211,22 +215,27 @@ where
             .unwrap_or_else(|o| o);
         self.heads.insert(pos, new_head);
 
-        cur
+        BucketItem {
+            index: cur.0,
+            item: cur.1,
+        }
     }
 
     // Index must be the index recieved when item was poped.
-    fn reinsert<S, B>(&mut self, index: usize, item: T, mut sort_fn: S, mut bucket_fn: B)
+    fn reinsert<S, B>(&mut self, item: BucketItem<T>, mut sort_fn: S, mut bucket_fn: B)
     where
         S: FnMut(&T, &T) -> Ordering,
         B: FnMut(&T, usize) -> usize,
     {
-        let i = bucket_fn(&item, self.buckets.len());
+        self.items[item.index] = item.item.clone();
+
+        let i = bucket_fn(&item.item, self.buckets.len());
         assert!(i < self.buckets.len());
 
         let pos = self.buckets[i]
-            .binary_search_by(|(_, a)| sort_fn(a, &item))
+            .binary_search_by(|(_, a)| sort_fn(a, &item.item))
             .unwrap_or_else(|o| o);
-        let new_elem = (index, item);
+        let new_elem = (item.index, item.item);
 
         if pos == self.buckets[i].len() {
             let end = (i, self.buckets[i].last().map(|o| o.clone()));
